@@ -7,7 +7,8 @@ class index_opts(Enum):
     WITHOUT = 2
     NEVER = 3
     ALREADY_INDEXED = 4
-    UNKNOWN = 5
+    MAX_SIZE_UPDATE = 5
+    UNKNOWN = 6
 
 class hpack_ctx:
     def __init__(self, max_table_size_in=4096, max_table_size_out=4096):
@@ -85,12 +86,13 @@ class hpack_ctx:
         elif byte & 0x40 > 0:
             return index_opts.INCREMENTAL
         elif byte & 0x20 > 0:
-            return index_opts.UNKNOWN
+            return index_opts.MAX_SIZE_UPDATE
         elif byte & 0x10 > 0:
             return index_opts.NEVER
         elif byte & 0xf0 == 0:
             return index_opts.WITHOUT
         else:
+            print("Found unknown index_opt", byte)
             return index_opts.UNKNOWN
 
     def decode_headers(self, encoded):
@@ -118,10 +120,18 @@ class hpack_ctx:
                     index_bits = 4
                 elif index_opt == index_opts.NEVER:
                     index_bits = 4
+                elif index_opt == index_opts.MAX_SIZE_UPDATE:
+                    index_bits = 5
 
                 # Decode the header name and value
                 index,bytes_read = ed.decode_integer(encoded, cur_byte, index_bits)
                 cur_byte = cur_byte + bytes_read
+
+                if index_opt == index_opts.MAX_SIZE_UPDATE:
+                    # Special path - just update the max table size
+                    self.table_in.set_max_size(index)
+                    continue
+
                 if index > 0:
                     # Name is contained within the table
                     header_field = self.table_in.find_field_by_index(index)

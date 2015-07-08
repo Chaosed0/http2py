@@ -13,6 +13,28 @@ class frame_type(IntEnum):
     SETTINGS = 0x4
 
 class frame:
+    frame_map = None
+
+    def decode_static(encoded):
+        if frame.frame_map is None:
+            frame.frame_map = {
+                    frame_type.UNSET: None,
+                    frame_type.DATA: data_frame,
+                    frame_type.HEADERS: headers_frame,
+                    frame_type.PRIORITY: None,
+                    frame_type.RST_STREAM: None,
+                    frame_type.SETTINGS: settings_frame,
+                }
+
+        frame_type_bit = frame_type(encoded[3])
+        new_frame_type = frame.frame_map[frame_type_bit]
+        if new_frame_type is None:
+            return None
+
+        the_frame = new_frame_type()
+        bytes_read = the_frame.decode(encoded)
+        return the_frame, bytes_read
+
     def __init__(self, frame_type):
         self.stream_id = 0x0
         self.flags = 0x0
@@ -33,7 +55,7 @@ class frame:
     def encode(self):
         if self.frame_type == frame_type.UNSET:
             raise Exception("Can't encode frame with frame_type unset")
-        elif self.stream_id <= 0 or self.stream_id > 16834:
+        elif self.stream_id < 0 or self.stream_id > 16834:
             raise Exception("Invalid stream identifier")
 
         # Total length is length of frame header (9) + length of payload
@@ -56,13 +78,19 @@ class frame:
         return encoded
 
     def decode(self, encoded):
-        return
+        length = int.from_bytes(encoded[0:3], 'big')
+        self.frame_type = frame_type(encoded[3])
+        self.flags = encoded[4]
+        self.stream_identifier = int.from_bytes(encoded[5:9], 'big')
+        self.decode_payload(encoded[9:], length)
+        return length+9
 
 class data_flags(IntEnum):
     END_STREAM = 0x1
     PADDED = 0x8
 
 class headers_flags(IntEnum):
+    END_STREAM = 0x1
     END_HEADERS = 0x4
     PADDED = 0x8
     PRIORITY = 0x20
@@ -96,6 +124,17 @@ class data_frame(frame):
 
         return encoded
 
+    def decode_payload(self, encoded, length):
+        cur_byte = 0
+
+        if self.has_padding():
+            self.pad_length = encoded[cur_byte]
+            cur_byte = cur_byte+1
+
+        self.data = encoded[cur_byte:cur_byte+length-self.pad_length]
+        cur_byte = cur_byte + length - self.pad_length
+        # The rest of the bytes are padding
+
 class headers_frame(frame):
     def __init__(self):
         frame.__init__(self, frame_type.HEADERS)
@@ -125,7 +164,7 @@ class headers_frame(frame):
                 encoded[cur_byte] = encoded[cur_byte] | 0x80
 
             encoded[cur_byte+4] = self.weight & 0xff
-            cur_byte = cur_byte + 4
+            cur_byte = cur_byte + 5
 
         encoded[cur_byte:] = self.header_block_fragment
         cur_byte = cur_byte + len(self.header_block_fragment)
@@ -135,6 +174,25 @@ class headers_frame(frame):
             cur_byte = cur_byte + pad_length
 
         return encoded
+
+    def decode_payload(self, encoded, length):
+        cur_byte = 0
+
+        if self.has_padding():
+            self.pad_length = encoded[cur_byte]
+            cur_byte = cur_byte + 1
+
+        if self.has_priority():
+            self.exclusive_dependency = (encoded[cur_byte] & 0x80) > 0
+            stream_dependency_bits = encoded[cur_byte:cur_byte+4]
+            stream_dependency_bits[0] = stream_dependency_bits[0] & 0x7f
+            self.stream_dependency = int.from_bytes(stream_dependency_bits, 'big')
+            self.weight = encoded[cur_byte+4]
+            cur_byte = cur_byte + 5
+
+        self.header_block_fragment = encoded[cur_byte:cur_byte+length-self.pad_length]
+        cur_byte = cur_byte + length - self.pad_length
+        # We can ignore the padding
 
 class settings_identifiers(IntEnum):
     HEADERS_TABLE_SIZE = 0x1
@@ -167,4 +225,14 @@ class settings_frame(frame):
             raise Exception("Settings frame must not set ACK alongside parameters")
 
         # Only return the bytes we used
-        return encoded[:cur_byte+1]
+        return encoded[0:cur_byte]
+
+    def decode_payload(self, encoded, length):
+        if self.is_flag_set(settings_flags.ACK) and length > 0:
+            raise Exception("Settings frame must not set ACK alongside parameters")
+
+        cur_byte = 0
+        while cur_byte < length:
+            idx,val = struct.unpack_from("!HI", encoded, cur_byte)
+            self.params[idx] = val
+            cur_byte = cur_byte + 6

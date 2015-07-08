@@ -1,4 +1,3 @@
-import struct
 
 def encode_integer(integer, prefix):
     # Make sure we don't get invalid prefix values
@@ -34,9 +33,9 @@ def decode_integer(encoded, start, prefix):
     # The rest of this is a translation of the pseudocode from the RFC
     exp = 0
     cont_bit = 1
-    bytes_read = 0
-    while cont_bit is not 0:
-        byte = encoded[start+bytes_read+1]
+    bytes_read = 1
+    while cont_bit != 0:
+        byte = encoded[start+bytes_read]
         integer = integer + (byte & 0x7f) * pow(2, exp)
         exp = exp + 7
         cont_bit = byte & 0x80

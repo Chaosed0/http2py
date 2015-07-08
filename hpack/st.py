@@ -73,8 +73,11 @@ class header_table:
 
     def __init__(self, max_size):
         self.cur_size = 0
-        self.max_size = max_size
         self.dynamic_table = []
+        self.set_max_size(max_size)
+
+    def set_max_size(self, max_size):
+        self.max_size = max_size
 
     def length(self):
         return header_table.st_len + len(self.dynamic_table)
