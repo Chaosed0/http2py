@@ -54,7 +54,7 @@ def encode_string_literal(string):
 def decode_string_literal(encoded, start):
     length, bytes_read = decode_integer(encoded, start, 7)
     # We currently don't support huffman encoding
-    if (encoded[0] & 0x80) > 1:
+    if (encoded[start] & 0x80) > 1:
         raise Exception("Huffman encoding found, but it is currently unsupported")
     string = encoded[start + bytes_read:start + bytes_read + length].decode('ascii')
     return string, bytes_read+length
