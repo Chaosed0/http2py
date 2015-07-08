@@ -10,7 +10,7 @@ class index_opts(Enum):
     UNKNOWN = 5
 
 class hpack_ctx:
-    def __init__(self, max_table_size_in=256, max_table_size_out=256):
+    def __init__(self, max_table_size_in=4096, max_table_size_out=4096):
         self.table_in = st.header_table(max_table_size_in)
         self.table_out = st.header_table(max_table_size_out)
         self.header_bytes = None
