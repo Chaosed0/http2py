@@ -72,8 +72,8 @@ def main():
         hexdump.hexdump(msg)
         for frame in frames:
             if isinstance(frame, h2.headers_frame):
-                ctx.decode_headers(frame.header_block_fragment)
-                print(frame.header_block_fragment)
+                headers = ctx.decode_headers(frame.header_block_fragment)
+                print(headers)
             if isinstance(frame, h2.data_frame) and len(frame.data) > 0:
                 print(frame.data.decode('ascii'))
                 waiting = False
