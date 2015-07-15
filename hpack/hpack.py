@@ -1,3 +1,4 @@
+import logging
 from enum import Enum
 from . import ed
 from . import st
@@ -12,8 +13,8 @@ class index_opts(Enum):
 
 class hpack_ctx:
     def __init__(self, max_table_size_in=4096, max_table_size_out=4096):
-        self.table_in = st.header_table(max_table_size_in)
-        self.table_out = st.header_table(max_table_size_out)
+        self.table_decode = st.header_table(max_table_size_in)
+        self.table_encode = st.header_table(max_table_size_out)
         self.header_bytes = None
         self.headers_out = {}
 
@@ -26,12 +27,12 @@ class hpack_ctx:
         if len(value) == 0:
             value = None
 
-        index = self.table_out.find_index_by_field(name, value)
+        index = self.table_encode.find_index_by_field(name, value)
         # There are seven possibilities here, defined in section 6.1 & 6.2 of the
         # RFC. Basically combinations of indexing options and what is already
         # indexed.
         if index is not None:
-            if value == self.table_out.find_field_by_index(index).value:
+            if value == self.table_encode.find_field_by_index(index).value:
                 # Both name and value are indexed
                 encoded = ed.encode_integer(index, 7)
                 encoded[0] = (encoded[0] & 0x7f) | 0x80
@@ -42,7 +43,7 @@ class hpack_ctx:
                     # Set the incremental indexing bits
                     encoded[0] = (encoded[0] & 0x3f) | 0x40
                     # Index the entire header field
-                    self.table_out.new_header(name, value)
+                    self.table_encode.new_header(name, value)
                 elif index_opt is index_opts.WITHOUT:
                     # Just name is indexed and we don't want indexing
                     encoded = ed.encode_integer(index, 4)
@@ -62,7 +63,7 @@ class hpack_ctx:
                 # Neither name nor value is indexed and we want incremental indexing
                 encoded[0] = (encoded[0] & 0x3f) | 0x40
                 # Index the entire header field
-                self.table_out.new_header(name, value)
+                self.table_encode.new_header(name, value)
             elif index_opt is index_opts.WITHOUT:
                 # Just name is indexed and we don't want indexing
                 encoded[0] = encoded[0] & 0x0f
@@ -107,10 +108,12 @@ class hpack_ctx:
                 # This header is indexed and we should just find it in the
                 # table
                 index, bytes_read = ed.decode_integer(encoded, cur_byte, 7)
-                header_field = self.table_in.find_field_by_index(index)
+                header_field = self.table_decode.find_field_by_index(index)
                 if header_field is None:
                     # Protocol error
-                    return
+                    logging.warning("Protocol Error: Couldn't find index %d in decode table", index)
+                    logging.debug("Decode dynamic table: %s", self.table_decode.dynamic_table)
+                    return None
                 name,value = header_field
             else:
                 # Figure out how many bits the index takes up
@@ -129,12 +132,13 @@ class hpack_ctx:
 
                 if index_opt == index_opts.MAX_SIZE_UPDATE:
                     # Special path - just update the max table size
-                    self.table_in.set_max_size(index)
+                    self.table_decode.set_max_size(index)
+                    logging.debug("Max decode dynamic table size updated to %d", index)
                     continue
 
                 if index > 0:
                     # Name is contained within the table
-                    header_field = self.table_in.find_field_by_index(index)
+                    header_field = self.table_decode.find_field_by_index(index)
                     name = header_field.name
                 else:
                     # Name is explicit
@@ -144,9 +148,12 @@ class hpack_ctx:
                 # Value is always explicit if not in ALREADY_INDEXED mode
                 value,bytes_read = ed.decode_string_literal(encoded, cur_byte)
 
+                logging.debug("Read header '%s: %s' (index type: %s)", name, value, index_opt.name)
+
                 if index_opt == index_opts.INCREMENTAL:
                     # Incremental; add to the table
-                    self.table_in.new_header(name, value)
+                    self.table_decode.new_header(name, value)
+                    logging.debug("New header added to the decoder dynamic table: %s", self.table_decode.dynamic_table)
 
             decoded_headers[name] = value
             cur_byte = cur_byte + bytes_read

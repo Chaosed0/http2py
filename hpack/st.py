@@ -1,4 +1,5 @@
 from collections import namedtuple
+import logging
 
 class header_table:
     header_field = namedtuple("header_field", ["name", "value"])
@@ -111,4 +112,6 @@ class header_table:
         self.cur_size = self.cur_size + len(name) + len(value) + 32
         while self.cur_size > self.max_size:
             elem = self.dynamic_table.pop()
-            self.cur_size = self.cur_size - (len(elem.name) + len(elem.value) + 32)
+            elem_size = len(elem.name) + len(elem.value) + 32
+            logging.debug("Dynamic table size %d exceeds maximum, evicting %s (size %d)", self.cur_size, elem, elem_size)
+            self.cur_size = self.cur_size - elem_size 

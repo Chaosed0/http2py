@@ -11,6 +11,11 @@ class frame_type(IntEnum):
     PRIORITY = 0x2
     RST_STREAM = 0x3
     SETTINGS = 0x4
+    PUSH_PROMISE = 0x5
+    PING = 0x6
+    GOAWAY = 0x7
+    WINDOW_UPDATE = 0x8
+    CONTINUATION = 0x9
 
 class frame:
     frame_map = None
@@ -24,6 +29,11 @@ class frame:
                     frame_type.PRIORITY: None,
                     frame_type.RST_STREAM: None,
                     frame_type.SETTINGS: settings_frame,
+                    frame_type.PUSH_PROMISE: None,
+                    frame_type.PING: None,
+                    frame_type.GOAWAY: goaway_frame,
+                    frame_type.WINDOW_UPDATE: None,
+                    frame_type.CONTINUATION: None,
                 }
 
         frame_type_bit = frame_type(encoded[3])
@@ -97,6 +107,22 @@ class headers_flags(IntEnum):
 
 class settings_flags(IntEnum):
     ACK = 0x1
+
+class error_codes(IntEnum):
+    NO_ERROR = 0x0
+    PROTOCOL_ERROR = 0x1
+    INTERNAL_ERROR = 0x2
+    FLOW_CONTROL_ERROR = 0x3
+    SETTINGS_TIMEOUT = 0x4
+    STREAM_CLOSED = 0x5
+    FRAME_SIZE_ERROR = 0x6
+    REFUSED_STREAM = 0x7
+    CANCEL = 0x8
+    COMPRESSION_ERROR = 0x9
+    CONNECT_ERROR = 0xa
+    ENHANCE_YOUR_CALM = 0xb
+    INADEQUATE_SECURITY = 0xc
+    HTTP_1_1_REQUIRED = 0xd
 
 class data_frame(frame):
     def __init__(self):
@@ -236,3 +262,22 @@ class settings_frame(frame):
             idx,val = struct.unpack_from("!HI", encoded, cur_byte)
             self.params[idx] = val
             cur_byte = cur_byte + 6
+
+class goaway_frame(frame):
+    def __init__(self):
+        frame.__init__(self, frame_type.GOAWAY)
+        self.last_stream_id = 0
+        self.error_code = error_codes.UNSET
+        self.debug_data = None
+
+    def encode_payload(self):
+        encoded = struct.pack("!HH", self.last_stream_id, self.error_code)
+        # First bit is reserved
+        encoded[0] = encoded[0] & 0x7f
+        encoded.append(self.debug_data)
+
+    def decode_payload(self, encoded, length):
+        encoded[0] = encoded[0] & 0x7f
+        self.last_stream_id = encoded[0:4]
+        self.error_code = encoded[4:8]
+        self.debug_data = encoded[8:]
