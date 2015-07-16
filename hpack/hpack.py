@@ -3,6 +3,8 @@ from enum import Enum
 from . import ed
 from . import st
 
+logger = logging.getLogger('hpack')
+
 class index_opts(Enum):
     INCREMENTAL = 1
     WITHOUT = 2
@@ -55,7 +57,7 @@ class hpack_ctx:
                     # Set the bits
                     encoded[0] = (encoded[0] & 0x0f) | 0x10
                 # Encode the value
-                encoded.extend(ed.encode_string_literal(value))
+                encoded.extend(ed.encode_string_literal(value, True))
         else:
             encoded = bytearray()
             encoded.append(0)
@@ -71,8 +73,8 @@ class hpack_ctx:
                 # Just name is indexed and we don't want indexing
                 encoded[0] = (encoded[0] & 0x0f) | 0x10
             # Encode the name and value
-            encoded.extend(ed.encode_string_literal(name))
-            encoded.extend(ed.encode_string_literal(value))
+            encoded.extend(ed.encode_string_literal(name, True))
+            encoded.extend(ed.encode_string_literal(value, True))
 
         self.header_bytes.extend(encoded)
 
@@ -111,8 +113,8 @@ class hpack_ctx:
                 header_field = self.table_decode.find_field_by_index(index)
                 if header_field is None:
                     # Protocol error
-                    logging.warning("Protocol Error: Couldn't find index %d in decode table", index)
-                    logging.debug("Decode dynamic table: %s", self.table_decode.dynamic_table)
+                    logger.warning("Protocol Error: Couldn't find index %d in decode table", index)
+                    logger.debug("Decode dynamic table: %s", self.table_decode.dynamic_table)
                     return None
                 name,value = header_field
             else:
@@ -133,7 +135,7 @@ class hpack_ctx:
                 if index_opt == index_opts.MAX_SIZE_UPDATE:
                     # Special path - just update the max table size
                     self.table_decode.set_max_size(index)
-                    logging.debug("Max decode dynamic table size updated to %d", index)
+                    logger.debug("Max decode dynamic table size updated to %d", index)
                     continue
 
                 if index > 0:
@@ -148,12 +150,12 @@ class hpack_ctx:
                 # Value is always explicit if not in ALREADY_INDEXED mode
                 value,bytes_read = ed.decode_string_literal(encoded, cur_byte)
 
-                logging.debug("Read header '%s: %s' (index type: %s)", name, value, index_opt.name)
+                logger.debug("Read header '%s: %s' (index type: %s)", name, value, index_opt.name)
 
                 if index_opt == index_opts.INCREMENTAL:
                     # Incremental; add to the table
                     self.table_decode.new_header(name, value)
-                    logging.debug("New header added to the decoder dynamic table: %s", self.table_decode.dynamic_table)
+                    logger.debug("New header added to the decoder dynamic table: %s", self.table_decode.dynamic_table)
 
             decoded_headers[name] = value
             cur_byte = cur_byte + bytes_read

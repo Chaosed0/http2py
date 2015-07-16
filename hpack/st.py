@@ -113,5 +113,6 @@ class header_table:
         while self.cur_size > self.max_size:
             elem = self.dynamic_table.pop()
             elem_size = len(elem.name) + len(elem.value) + 32
-            logging.debug("Dynamic table size %d exceeds maximum, evicting %s (size %d)", self.cur_size, elem, elem_size)
+            logging.debug("Dynamic table size %d exceeds maximum, evicting %s (size %d)",
+                    self.cur_size, elem, elem_size)
             self.cur_size = self.cur_size - elem_size 

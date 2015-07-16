@@ -1,4 +1,5 @@
 from hpack.hpack import hpack_ctx
+from hpack import ed
 from os import urandom
 import socket
 import logging
@@ -13,8 +14,13 @@ def decode_frames(encoded):
         encoded = encoded[bytes_read:]
     return frames
 
-def main():
-    logging.basicConfig(format="[%(levelname)s] %(filename)s:%(lineno)d %(funcName)s(): %(message)s", level=logging.DEBUG)
+
+def test_huffman_encode():
+    encoded_string = ed.encode_huffman_string("lolwut".encode('ascii'))
+    decoded_string = ed.decode_huffman_string(encoded_string, 0, len(encoded_string))
+    logging.debug(decoded_string)
+
+def test_request():
     logging.info("Started test program for h2")
 
     logging.debug("Connecting socket")
@@ -82,6 +88,9 @@ def main():
             if isinstance(frame, h2.data_frame) and len(frame.data) > 0:
                 logging.debug("Data: %s",frame.data.decode('ascii'))
                 waiting = False
+            if isinstance(frame, h2.goaway_frame) or len(msg) == 0:
+                waiting = False
+                return
 
     ctx.start_encode()
     ctx.encode_header(":method","GET")
@@ -114,6 +123,9 @@ def main():
             if isinstance(frame, h2.data_frame) and len(frame.data) > 0:
                 logging.debug("Data: %s",frame.data.decode('ascii'))
                 waiting = False
+            if isinstance(frame, h2.goaway_frame) or len(msg) == 0:
+                waiting = False
+                return
 
-if __name__ == "__main__":
-    main()
+logging.basicConfig(format="[%(levelname)s] %(filename)s:%(lineno)d %(funcName)s(): %(message)s", level=logging.DEBUG)
+logging.getLogger('hpack').setLevel(logging.INFO)

@@ -267,7 +267,7 @@ class goaway_frame(frame):
     def __init__(self):
         frame.__init__(self, frame_type.GOAWAY)
         self.last_stream_id = 0
-        self.error_code = error_codes.UNSET
+        self.error_code = error_codes.NO_ERROR
         self.debug_data = None
 
     def encode_payload(self):
@@ -277,7 +277,6 @@ class goaway_frame(frame):
         encoded.append(self.debug_data)
 
     def decode_payload(self, encoded, length):
-        encoded[0] = encoded[0] & 0x7f
         self.last_stream_id = encoded[0:4]
         self.error_code = encoded[4:8]
         self.debug_data = encoded[8:]

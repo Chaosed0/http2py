@@ -1,3 +1,10 @@
+import math
+import binascii
+import struct
+import logging
+
+logger = logging.getLogger('hpack')
+
 huffman_encode_table = [
        (0x1ff8,13), (0x7fffd8,23), (0xfffffe2,28), (0xfffffe3,28), (0xfffffe4,28), (0xfffffe5,28), (0xfffffe6,28), (0xfffffe7,28),
        (0xfffffe8,28), (0xffffea,24), (0x3ffffffc,30), (0xfffffe9,28), (0xfffffea,28), (0x3ffffffd,30), (0xfffffeb,28), (0xfffffec,28),
@@ -81,12 +88,17 @@ def decode_integer(encoded, start, prefix):
         
     return integer,bytes_read
 
-def encode_string_literal(string):
-    encoded = encode_integer(len(string), 7)
-    # Set the "huffman encoding" bit to 0
-    encoded[0] = encoded[0] & 0x7f
+def encode_string_literal(string, huffman=False):
     # Encode the string
-    encoded.extend(string.encode('ascii'))
+    encoded_string = string.encode('ascii')
+    if huffman is True:
+        encoded_string = encode_huffman_string(encoded_string)
+
+    encoded = encode_integer(len(encoded_string), 7)
+    encoded.extend(encoded_string)
+    # Set the "huffman encoding" bit
+    encoded[0] = (encoded[0] & 0x7f) | (0x80 if huffman else 0x0)
+
     return encoded
 
 def decode_string_literal(encoded, start):
@@ -103,7 +115,77 @@ def rshift(val, n):
     return val>>n if val >= 0 else (val+0x100000000)>>n
 
 def encode_huffman_string(string):
-    return
+    encoded = bytearray(len(string))
+    encoded_bit = 0
+    idx = 0
+    encoding_bit = 0
+
+    logger.debug(" --- Huffman encoding start ---")
+
+    while idx < len(string):
+        logger.debug("Encoding byte %d (%c)", string[idx], chr(string[idx]))
+
+        # Grab the encoding for the current character from the huffman encoding table
+        char_encoding_tuple = huffman_encode_table[string[idx]]
+        char_encoding = char_encoding_tuple[0]
+        char_encoding_bits = char_encoding_tuple[1]
+
+        logger.debug("Got encoding: 0x%s, %d bits, truncating at %d",
+                '{:x}'.format(char_encoding), char_encoding_bits, encoding_bit)
+
+        # Get only the bits we haven't packed yet from the encoding
+        char_encoding_bits -= encoding_bit
+        bitmask = (1 << char_encoding_bits) - 1
+        char_encoding = char_encoding & bitmask
+
+        logger.debug("Truncated encoding: 0x%s, %d bits", '{:x}'.format(char_encoding), char_encoding_bits)
+
+        # Get the next byte and bit index we want to pack into
+        byte_idx = encoded_bit // 8
+        bit_idx = encoded_bit % 8
+        bits_left = 8 - bit_idx
+
+        pack_bits = 0
+        # Move the current character encoding into the right position within
+        # the byte we're packing into
+        if char_encoding_bits >= bits_left:
+            # We have more bits we need to pack than bits to pack into;
+            # truncate the encoding
+            pack_bits = rshift(char_encoding, char_encoding_bits - bits_left)
+            encoded_bit = (byte_idx+1)*8
+            encoding_bit += bits_left
+        else:
+            # We have less bits we need to pack than bits to pack into;
+            # just move the bits into the right position within the byte
+            pack_bits = char_encoding << bits_left - char_encoding_bits
+            encoded_bit = byte_idx*8 + bit_idx + char_encoding_bits
+            encoding_bit = encoding_bit + char_encoding_bits
+
+        logger.debug("Packing 0x%s into byte %d at bit %d with %d bits left",
+                '{:x}'.format(pack_bits), byte_idx, bit_idx, bits_left)
+
+        # Add more bytes if we need to 
+        if len(encoded) < byte_idx:
+            encoded.append(0x0)
+
+        # Pack the bits
+        encoded[byte_idx] = encoded[byte_idx] | pack_bits
+
+        if encoding_bit >= char_encoding_bits:
+            encoding_bit = 0
+            idx = idx+1
+
+    # The last bits have to be the beginning of the EOF encoding
+    if encoded_bit%8 != 0:
+        logger.debug("Filling last bits with EOF")
+        eof = huffman_encode_table[256]
+        eof_encoding = rshift(eof[0], eof[1] - (8 - (encoded_bit % 8)))
+        encoded[encoded_bit//8] |= eof_encoding
+
+    encoded = encoded[:encoded_bit//8 + (1 if encoded_bit%8 > 0 else 0)]
+    logger.debug("Got huffman encoding of bit length %d: %s", encoded_bit, encoded)
+    logger.debug(" --- Huffman encoding end ---")
+    return encoded
 
 def decode_huffman_string(encoded, start, length):
     decoded = bytearray()
