@@ -48,7 +48,8 @@ for idx,val in enumerate(huffman_encode_table):
 
 def encode_integer(integer, prefix):
     # Make sure we don't get invalid prefix values
-    assert(prefix <= 8 and prefix > 0)
+    if prefix > 8 or prefix <= 0:
+        raise Exception("Invalid prefix {:d} passed to encode_integer".format(prefix))
 
     encoded = bytearray()
     prefix_max = pow(2,prefix) - 1
@@ -69,7 +70,8 @@ def encode_integer(integer, prefix):
 
 def decode_integer(encoded, start, prefix):
     # Make sure we don't get an invalid prefix value
-    assert(prefix <= 8 and prefix > 0)
+    if prefix > 8 and prefix <= 0:
+        raise Exception("Invalid prefix {:d} passed to encode_integer".format(prefix))
 
     prefix_max = pow(2,prefix) - 1
     integer = encoded[start] & prefix_max
@@ -105,7 +107,6 @@ def encode_string_literal(string, huffman=False):
 
 def decode_string_literal(encoded, start):
     length, bytes_read = decode_integer(encoded, start, 7)
-    # We currently don't support huffman encoding
     if (encoded[start] & 0x80) > 1:
         string = decode_huffman_string(encoded, start+bytes_read, length)
     else:

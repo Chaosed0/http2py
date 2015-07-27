@@ -1,11 +1,10 @@
 from hpack import hpack
-from hpack import ed
+from h2 import h2
 from os import urandom
 import socket
 import logging
 import hexdump
 import ssl
-import h2
 
 def decode_frames(encoded):
     frames = []
@@ -15,13 +14,7 @@ def decode_frames(encoded):
         encoded = encoded[bytes_read:]
     return frames
 
-
-def test_huffman_encode():
-    encoded_string = ed.encode_huffman_string("lolwut".encode('ascii'))
-    decoded_string = ed.decode_huffman_string(encoded_string, 0, len(encoded_string))
-    logging.debug(decoded_string)
-
-def test_request():
+def main():
     logging.info("Started test program for h2")
 
     logging.debug("Connecting socket")
@@ -142,5 +135,7 @@ def test_request():
                 waiting = False
                 return
 
-logging.basicConfig(format="[%(levelname)s] %(filename)s:%(lineno)d %(funcName)s(): %(message)s", level=logging.DEBUG)
-logging.getLogger('hpack').setLevel(logging.INFO)
+if __name__ == '__main__':
+    logging.basicConfig(format="[%(levelname)s] %(filename)s:%(lineno)d %(funcName)s(): %(message)s", level=logging.DEBUG)
+    logging.getLogger('hpack').setLevel(logging.INFO)
+    main()
