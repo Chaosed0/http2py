@@ -1,6 +1,7 @@
 from enum import IntEnum
 from os import urandom
 import struct
+import logging
 
 connection_preface = bytearray("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", "ascii")
 
@@ -36,10 +37,13 @@ class frame:
                     frame_type.CONTINUATION: None,
                 }
 
-        frame_type_bit = frame_type(encoded[3])
-        new_frame_type = frame.frame_map[frame_type_bit]
-        if new_frame_type is None:
-            return None
+        if encoded[3] in frame.frame_map:
+            frame_type_bit = frame_type(encoded[3])
+            new_frame_type = frame.frame_map[frame_type_bit]
+            if new_frame_type is None:
+                return None,0
+        else:
+            return None,0
 
         the_frame = new_frame_type()
         bytes_read = the_frame.decode(encoded)
@@ -231,7 +235,7 @@ class settings_identifiers(IntEnum):
 class settings_frame(frame):
     def __init__(self):
         frame.__init__(self, frame_type.SETTINGS)
-        self.params = [None,None,None,None,None,None]
+        self.params = {}
 
     def set_param(self, identifier, value):
         self.params[identifier] = value
@@ -242,8 +246,6 @@ class settings_frame(frame):
         cur_byte = 0
 
         for idx,val in enumerate(self.params):
-            if val is None:
-                continue
             encoded[cur_byte:] = struct.pack("!HI", idx, val)
             cur_byte = cur_byte + 6
 

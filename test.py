@@ -4,6 +4,7 @@ from os import urandom
 import socket
 import logging
 import hexdump
+import ssl
 import h2
 
 def decode_frames(encoded):
@@ -25,7 +26,18 @@ def test_request():
 
     logging.debug("Connecting socket")
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.connect(('127.0.0.1', 12345))
+    sslcontext = ssl.create_default_context()
+    sslcontext.check_hostname = False
+    sslcontext.verify_mode = ssl.CERT_NONE
+    sslcontext.set_alpn_protocols(['h2'])
+    sock = sslcontext.wrap_socket(sock)
+
+    sock.connect(('127.0.0.1', 443))
+
+    if sock.selected_alpn_protocol() != 'h2':
+        logging.warn("Server did not negotiate h2 (alpn)")
+        return
+
     sock.sendall(h2.connection_preface)
     logging.debug("SEND:")
     hexdump.hexdump(h2.connection_preface)
@@ -43,9 +55,10 @@ def test_request():
     waiting = True
     while waiting:
         msg = sock.recv(512)
-        frames = decode_frames(msg)
-        print('RECV:',  frames)
+        logging.debug('RECV:')
         hexdump.hexdump(msg)
+        frames = decode_frames(msg)
+        logging.debug('%s', frames)
         for frame in frames:
             if isinstance(frame, h2.settings_frame) and frame.is_flag_set(h2.settings_flags.ACK):
                 waiting = False
@@ -78,9 +91,10 @@ def test_request():
     waiting = True
     while waiting:
         msg = sock.recv(512)
-        frames = decode_frames(msg)
-        logging.debug("RECV: %s",frames)
+        logging.debug('RECV:')
         hexdump.hexdump(msg)
+        frames = decode_frames(msg)
+        logging.debug('%s', frames)
         for frame in frames:
             if isinstance(frame, h2.headers_frame):
                 headers = ctx.decode_headers(frame.header_block_fragment)
@@ -112,9 +126,10 @@ def test_request():
     waiting = True
     while waiting:
         msg = sock.recv(512)
-        frames = decode_frames(msg)
-        print('RECV: %s', frames)
+        logging.debug('RECV:')
         hexdump.hexdump(msg)
+        frames = decode_frames(msg)
+        logging.debug('%s', frames)
         for frame in frames:
             if isinstance(frame, h2.headers_frame):
                 headers = ctx.decode_headers(frame.header_block_fragment)

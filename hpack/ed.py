@@ -189,24 +189,27 @@ def encode_huffman_string(string):
 
 def decode_huffman_string(encoded, start, length):
     decoded = bytearray()
-    decode_bytes = bytearray(8)
+    decode_index = 0
     decoded_bits = 0
     total_decoded_bits = 0
     for byte in encoded[start:]:
+        logger.debug("Decoding byte %s", '{:02x}'.format(byte))
         for bit_idx in range(8):
+            logger.debug("Currently at bit %d, total decoded: %d", decoded_bits, total_decoded_bits)
             bit = rshift(byte & (1 << (7-bit_idx)), 7-bit_idx)
-            decode_byte_idx = decoded_bits // 8
-            decode_bytes[decode_byte_idx] = (decode_bytes[decode_byte_idx] << 1) | bit
+            decode_index = (decode_index << 1) | bit
 
             decoded_bits = decoded_bits + 1
             total_decoded_bits = total_decoded_bits + 1
-            index = int.from_bytes(decode_bytes[:decode_byte_idx+1], 'little')
-            byte_tuple = (index, decoded_bits)
+            byte_tuple = (decode_index, decoded_bits)
+
+            logger.debug("New decode sequence: %s with %d bits", '{:02x}'.format(decode_index), decoded_bits)
 
             if byte_tuple in huffman_decode_table:
                 decoded.append(huffman_decode_table[byte_tuple])
+                logger.debug("Decoded one character: %s, current: %s", huffman_decode_table[byte_tuple], decoded.decode('ascii'))
                 decoded_bits = 0
-                decode_bytes = bytearray(8)
+                decode_index = 0
             if total_decoded_bits >= length*8:
                 break
         if total_decoded_bits >= length*8:
