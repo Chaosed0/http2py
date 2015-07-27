@@ -141,13 +141,16 @@ class data_frame(frame):
         encoded = bytearray(1+len(self.data)+self.pad_length)
         cur_byte = 0
 
+        # 8-bit Padding length field
         if self.has_padding():
             encoded[cur_byte] = self.pad_length & 0xff
             cur_byte = 1
 
+        # Variable length data payload
         encoded[cur_byte:] = self.data
         cur_byte = cur_byte + len(self.data)
 
+        # Variable length padding
         if self.has_padding():
             encoded[cur_byte:] = urandom(self.pad_length)
             cur_byte = cur_byte + self.pad_length
@@ -157,13 +160,16 @@ class data_frame(frame):
     def decode_payload(self, encoded, length):
         cur_byte = 0
 
+        # 8-bit padding length
         if self.has_padding():
             self.pad_length = encoded[cur_byte]
             cur_byte = cur_byte+1
 
+        # Variable length data payload
         self.data = encoded[cur_byte:cur_byte+length-self.pad_length]
         cur_byte = cur_byte + length - self.pad_length
-        # The rest of the bytes are padding
+        # The rest of the bytes are padding, we could verify the length but
+        # we'll just ignore them
 
 class headers_frame(frame):
     def __init__(self):
@@ -184,21 +190,28 @@ class headers_frame(frame):
         encoded = bytearray(6 + len(self.header_block_fragment) + self.pad_length)
         cur_byte = 0
 
+        # 8-bit padding length
         if self.has_padding():
             encoded[cur_byte] = self.pad_length & 0xff
             cur_byte = cur_byte + 1
 
         if self.has_priority():
+            # 1-bit exclusive dependency flag and 31-bit stream dependency
             encoded[cur_byte:cur_byte+4] = self.stream_dependency.to_bytes(4, 'big')
             if self.exclusive_dependency:
                 encoded[cur_byte] = encoded[cur_byte] | 0x80
+            else:
+                encoded[cur_byte] = encoded[cur_byte] & 0x7f
 
+            # 8-bit frame weight
             encoded[cur_byte+4] = self.weight & 0xff
             cur_byte = cur_byte + 5
 
+        # Variable-length header block fragment
         encoded[cur_byte:] = self.header_block_fragment
         cur_byte = cur_byte + len(self.header_block_fragment)
 
+        # Variable-length padding
         if self.has_padding():
             encoded[cur_byte:] = urandom(pad_length)
             cur_byte = cur_byte + pad_length
@@ -208,18 +221,23 @@ class headers_frame(frame):
     def decode_payload(self, encoded, length):
         cur_byte = 0
 
+        # 8-bit padding length
         if self.has_padding():
             self.pad_length = encoded[cur_byte]
             cur_byte = cur_byte + 1
 
         if self.has_priority():
+            # 1-bit exclusive dependency flag
             self.exclusive_dependency = (encoded[cur_byte] & 0x80) > 0
+            # 31-bit stream dependency
             stream_dependency_bits = encoded[cur_byte:cur_byte+4]
             stream_dependency_bits[0] = stream_dependency_bits[0] & 0x7f
             self.stream_dependency = int.from_bytes(stream_dependency_bits, 'big')
+            # 8-bit weight
             self.weight = encoded[cur_byte+4]
             cur_byte = cur_byte + 5
 
+        # Variable-length header block fragment, must be decoded by an hpack ctx
         self.header_block_fragment = encoded[cur_byte:cur_byte+length-self.pad_length]
         cur_byte = cur_byte + length - self.pad_length
         # We can ignore the padding
@@ -238,10 +256,12 @@ class settings_frame(frame):
         self.params = {}
 
     def set_param(self, identifier, value):
+        if identifier not in settings_identifiers:
+            raise Exception("Invalid SETTINGS identifier {:d}", idx)
         self.params[identifier] = value
 
     def encode_payload(self):
-        # Maximum size is 36 bytes (6 values, 6 bytes per value)
+        # Maximum size is 36 bytes (6 different identifiers, 2 bytes to store the identifier and 4 bytes to store the value)
         encoded = bytearray(36)
         cur_byte = 0
 
@@ -277,6 +297,7 @@ class goaway_frame(frame):
         # First bit is reserved
         encoded[0] = encoded[0] & 0x7f
         encoded.append(self.debug_data)
+        return encoded
 
     def decode_payload(self, encoded, length):
         self.last_stream_id = encoded[0:4]

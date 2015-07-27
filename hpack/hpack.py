@@ -1,7 +1,7 @@
 import logging
 from enum import Enum
 from . import ed
-from . import st
+from . import table
 
 logger = logging.getLogger('hpack')
 
@@ -13,10 +13,10 @@ class index_opts(Enum):
     MAX_SIZE_UPDATE = 5
     UNKNOWN = 6
 
-class hpack_ctx:
+class ctx:
     def __init__(self, max_table_size_in=4096, max_table_size_out=4096):
-        self.table_decode = st.header_table(max_table_size_in)
-        self.table_encode = st.header_table(max_table_size_out)
+        self.table_decode = table.header_table(max_table_size_in)
+        self.table_encode = table.header_table(max_table_size_out)
         self.header_bytes = None
         self.headers_out = {}
 

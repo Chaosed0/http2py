@@ -1,3 +1,5 @@
+# Encoding and decoding utilities for hpack
+
 import math
 import binascii
 import struct

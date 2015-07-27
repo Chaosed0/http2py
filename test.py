@@ -1,4 +1,4 @@
-from hpack.hpack import hpack_ctx
+from hpack import hpack
 from hpack import ed
 from os import urandom
 import socket
@@ -41,7 +41,7 @@ def test_request():
     sock.sendall(h2.connection_preface)
     logging.debug("SEND:")
     hexdump.hexdump(h2.connection_preface)
-    ctx = hpack_ctx()
+    ctx = hpack.ctx()
 
     f = h2.settings_frame()
     f.set_param(h2.settings_identifiers.ENABLE_PUSH, 1)

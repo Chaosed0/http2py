@@ -1,5 +1,9 @@
+# hpack header table, represented by a static and dynamic table.
+
 from collections import namedtuple
 import logging
+
+logger = logging.getLogger('hpack')
 
 class header_table:
     header_field = namedtuple("header_field", ["name", "value"])
@@ -113,6 +117,6 @@ class header_table:
         while self.cur_size > self.max_size:
             elem = self.dynamic_table.pop()
             elem_size = len(elem.name) + len(elem.value) + 32
-            logging.debug("Dynamic table size %d exceeds maximum, evicting %s (size %d)",
+            logger.debug("Dynamic table size %d exceeds maximum, evicting %s (size %d)",
                     self.cur_size, elem, elem_size)
             self.cur_size = self.cur_size - elem_size 
