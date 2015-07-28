@@ -87,6 +87,9 @@ class header_table:
     def length(self):
         return header_table.st_len + len(self.dynamic_table)
 
+    def dynamic_size(self):
+        return self.cur_size
+
     def find_field_by_index(self, index):
         if index < header_table.st_len:
             return header_table.static_table[index]
@@ -107,7 +110,7 @@ class header_table:
         for idx,val in enumerate(self.dynamic_table):
             if val == hfield:
                 return idx + header_table.st_len
-            elif val.name == name:
+            elif val.name == name and prelim_idx is None:
                 prelim_idx = idx + header_table.st_len
         return prelim_idx
 
