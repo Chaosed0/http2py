@@ -55,6 +55,9 @@ def main():
         for frame in frames:
             if isinstance(frame, h2.settings_frame) and frame.is_flag_set(h2.settings_flags.ACK):
                 waiting = False
+            if isinstance(frame, h2.goaway_frame) or len(msg) == 0:
+                waiting = False
+                return
 
     f = h2.settings_frame()
     f.stream_id = 0
