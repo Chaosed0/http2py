@@ -14,14 +14,23 @@ class index_opts(Enum):
     UNKNOWN = 6
 
 class ctx:
-    def __init__(self, max_table_size_in=4096, max_table_size_out=4096):
+    def __init__(self, max_table_size_in=4096, max_table_size_out=4096, huffman_encoding=True):
         self.table_decode = table.header_table(max_table_size_in)
         self.table_encode = table.header_table(max_table_size_out)
         self.header_bytes = None
         self.headers_out = {}
+        self.use_huffman_encoding = huffman_encoding
 
     def start_encode(self):
         self.header_bytes = bytearray()
+
+    def encode_header_dict(self, header_dict, index_opt=index_opts.INCREMENTAL):
+        for name in header_dict:
+            self.encode_header(name, header_dict[name], index_opt)
+
+    def encode_header_list(self, header_list, index_opt=index_opts.INCREMENTAL):
+        for header in header_list:
+            self.encode_header(header[0], header[1], index_opt)
 
     def encode_header(self, name, value, index_opt=index_opts.INCREMENTAL):
         if self.header_bytes is None:
@@ -29,52 +38,58 @@ class ctx:
         if len(value) == 0:
             value = None
 
+        logger.debug("Encoding header '%s': '%s'", name, value)
+
         index = self.table_encode.find_index_by_field(name, value)
         # There are seven possibilities here, defined in section 6.1 & 6.2 of the
         # RFC. Basically combinations of indexing options and what is already
         # indexed.
         if index is not None:
             if value == self.table_encode.find_field_by_index(index).value:
-                # Both name and value are indexed
+                logger.debug("Found header name and value in table")
+                # Both name and value are indexed, just pull the index and
+                # encode that
                 encoded = ed.encode_integer(index, 7)
                 encoded[0] = (encoded[0] & 0x7f) | 0x80
             else:
+                logger.debug("Found header name, but not value, in table")
+                # Just the name is indexed
                 if index_opt is index_opts.INCREMENTAL:
-                    # Just name is indexed and we want incremental indexing
+                    # Index now
                     encoded = ed.encode_integer(index, 6)
-                    # Set the incremental indexing bits
                     encoded[0] = (encoded[0] & 0x3f) | 0x40
-                    # Index the entire header field
+                    logger.debug("Indexing header")
                     self.table_encode.new_header(name, value)
                 elif index_opt is index_opts.WITHOUT:
-                    # Just name is indexed and we don't want indexing
+                    # Don't index now
                     encoded = ed.encode_integer(index, 4)
-                    # Set the bits
                     encoded[0] = encoded[0] & 0x0f
                 else:
-                    # Just name is indexed and we don't want indexing
+                    # Never index this
                     encoded = ed.encode_integer(index, 4)
-                    # Set the bits
                     encoded[0] = (encoded[0] & 0x0f) | 0x10
                 # Encode the value
-                encoded.extend(ed.encode_string_literal(value, True))
+                encoded.extend(ed.encode_string_literal(value, self.use_huffman_encoding))
         else:
+            logger.debug("Did not find header in table")
+            # Neither the name or value is indexed
             encoded = bytearray()
             encoded.append(0)
             if index_opt is index_opts.INCREMENTAL:
-                # Neither name nor value is indexed and we want incremental indexing
+                # Index now
                 encoded[0] = (encoded[0] & 0x3f) | 0x40
-                # Index the entire header field
+                # Index the header field
+                logger.debug("Indexing header")
                 self.table_encode.new_header(name, value)
             elif index_opt is index_opts.WITHOUT:
-                # Just name is indexed and we don't want indexing
+                # Don't index
                 encoded[0] = encoded[0] & 0x0f
             else:
-                # Just name is indexed and we don't want indexing
+                # Never index
                 encoded[0] = (encoded[0] & 0x0f) | 0x10
             # Encode the name and value
-            encoded.extend(ed.encode_string_literal(name, True))
-            encoded.extend(ed.encode_string_literal(value, True))
+            encoded.extend(ed.encode_string_literal(name, self.use_huffman_encoding))
+            encoded.extend(ed.encode_string_literal(value, self.use_huffman_encoding))
 
         self.header_bytes.extend(encoded)
 
@@ -150,12 +165,12 @@ class ctx:
                 # Value is always explicit if not in ALREADY_INDEXED mode
                 value,bytes_read = ed.decode_string_literal(encoded, cur_byte)
 
-                logger.debug("Read header '%s: %s' (index type: %s)", name, value, index_opt.name)
-
                 if index_opt == index_opts.INCREMENTAL:
                     # Incremental; add to the table
                     self.table_decode.new_header(name, value)
                     logger.debug("New header added to the decoder dynamic table: %s", self.table_decode.dynamic_table)
+
+            logger.debug("Read header '%s: %s' (index type: %s)", name, value, index_opt.name)
 
             decoded_headers[name] = value
             cur_byte = cur_byte + bytes_read
