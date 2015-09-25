@@ -27,7 +27,6 @@ class h2_protocol_events(asyncio.Protocol):
             logging.warn("Server did not negotiate h2 (alpn)")
             self.terminate()
             return
-        self.connection.initiate()
 
     def data_received(self, data):
         logging.debug("RECV: ")
@@ -57,6 +56,8 @@ class h2_comms():
             "close": self.close_callback
         }
         self.connection = h2.connection.connection(callbacks)
+        self.connected = False
+        self.connection_future = None
 
     def connect(self):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -67,23 +68,38 @@ class h2_comms():
         self.sock = sslcontext.wrap_socket(self.sock)
         self.sock.connect((self.url, self.port))
 
-        coro = self.loop.create_connection(lambda: h2_protocol_events(self.connection, self.loop, self.sock),
+        coro= self.loop.create_connection(
+                lambda: h2_protocol_events(self.connection, self.loop, self.sock),
                 sock=self.sock)
 
-        future = self.loop.create_task(coro)
-        future.add_done_callback(self.on_connect)
+        self.connection_future = self.loop.create_task(coro)
+        self.connection_future.add_done_callback(self.on_connect)
 
     def on_connect(self, future):
         exc = future.exception()
         if exc is not None:
             logging.warn("Got exception when connecting: %s", exc)
             self.loop.stop()
+        else:
+            self.connection.initiate()
+            self.connected = True
 
     def send_request(self, headers, data=None):
-        self.loop.create_task(self.send_request_coro(headers, data))
+        if not self.connected:
+            if self.connection_future is None:
+                logging.warn("Tried to send a request when not connected")
+            else:
+                self.connection_future.add_done_callback(lambda future:
+                        self.loop.create_task(self.send_request_coro(headers, data, future)))
+        else:
+            self.loop.create_task(self.send_request_coro(headers, data))
 
-    async def send_request_coro(self, headers, data):
-        self.connection.send_request(headers, data)
+    async def send_request_coro(self, headers, data, future=None):
+        if future is None or future.exception() is None:
+            logging.debug("Sending request")
+            self.connection.send_request(headers, data)
+        else:
+            logging.debug("Aborting request send because we didn't connect successfully")
 
     def send_callback(self, data):
         logging.debug("SEND: ")

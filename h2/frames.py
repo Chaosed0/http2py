@@ -54,8 +54,8 @@ class frame:
         bytes_read = the_frame.decode(encoded)
         return the_frame, bytes_read
 
-    def __init__(self, frame_type):
-        self.stream_id = 0x0
+    def __init__(self, stream_id = 0x0, frame_type = frame_type.UNSET):
+        self.stream_id = stream_id
         self.flags = 0x0
         self.frame_type = frame_type
 
@@ -118,10 +118,10 @@ class settings_flags(IntEnum):
     ACK = 0x1
 
 class data_frame(frame):
-    def __init__(self):
-        frame.__init__(self, frame_type.DATA)
+    def __init__(self, stream_id = 0x0, data = None):
+        frame.__init__(self, stream_id, frame_type.DATA)
         self.pad_length = 0
-        self.data = bytearray()
+        self.data = data
 
     def has_padding(self):
         return self.is_flag_set(data_flags.PADDED)
@@ -161,13 +161,13 @@ class data_frame(frame):
         # we'll just ignore them
 
 class headers_frame(frame):
-    def __init__(self):
-        frame.__init__(self, frame_type.HEADERS)
+    def __init__(self, stream_id = 0x0, header_block_fragment = None):
+        frame.__init__(self, stream_id, frame_type.HEADERS)
         self.pad_length = 0
         self.exclusive_dependency = False
         self.stream_dependency = 0x0
         self.weight = 0
-        self.header_block_fragment = bytearray()
+        self.header_block_fragment = header_block_fragment
 
     def has_padding(self):
         return self.is_flag_set(headers_flags.PADDED)
@@ -240,8 +240,8 @@ class settings_identifiers(IntEnum):
     MAX_HEADER_LIST_SIZE = 0x6
 
 class settings_frame(frame):
-    def __init__(self):
-        frame.__init__(self, frame_type.SETTINGS)
+    def __init__(self, stream_id = 0x0):
+        frame.__init__(self, stream_id, frame_type.SETTINGS)
         self.params = {}
 
     def set_param(self, identifier, value):
@@ -291,8 +291,8 @@ class connection_error(IntEnum):
     HTTP_1_1_REQUIRED = 0xd
 
 class goaway_frame(frame):
-    def __init__(self, error = connection_error.NO_ERROR, debug_data = None):
-        frame.__init__(self, frame_type.GOAWAY)
+    def __init__(self, stream_id = 0x0, error = connection_error.NO_ERROR, debug_data = None):
+        frame.__init__(self, stream_id, frame_type.GOAWAY)
         self.last_stream_id = 0
         self.error_code = error
         self.debug_data = debug_data

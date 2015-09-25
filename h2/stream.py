@@ -1,5 +1,8 @@
 from enum import IntEnum
 from . import frames
+import logging
+
+logger = logging.getLogger('stream')
 
 class stream_state(IntEnum):
     IDLE = 0
@@ -24,9 +27,10 @@ class reserved(IntEnum):
 
 # Stream essentially represents one request/response pair
 class stream:
-    def __init__(self, identifier, reserved_state=reserved.NONE):
+    def __init__(self, identifier, hpack_ctx, reserved_state=reserved.NONE):
         self.identifier = identifier
         self.request_state = request_state.HEADERS
+        self.hpack_ctx = hpack_ctx
         if reserved_state is reserved.LOCAL:
             self.state = stream_state.RESERVED_LOCAL
         elif reserved_state is reserved.REMOTE:
@@ -34,11 +38,13 @@ class stream:
         else:
             self.state = stream_state.IDLE
 
-    def handle_frame(self, frame):
+    def handle_recv_frame(self, frame):
         # Normal request processing is HEADERS, followed by CONTINUATION,
         # followed by DATA. Intermingled with these can be PRIORITY, SETTINGS,
         # WINDOW_UPDATE, and RST_STREAM.
         # PUSH_PROMISE, PING, and GOAWAY are handled by the connection.
+
+        logger.log("Stream id %d handling %s frame", self.identifier, frame.frame_type)
 
         if frame.frame_type is frames.frame_type.HEADERS:
             if self.state is stream_state.IDLE:
@@ -93,7 +99,24 @@ class stream:
                 # Process the response
                 return
 
-    def handle_send(self, frame):
-        if not state_allowed(frame.frame_type, self.state):
-            #send goaway
-            return
+    def handle_send_request(self, headers, data=None):
+        frames_to_send = []
+        self.hpack_ctx.start_encode()
+        self.hpack_ctx.encode_header_dict(headers)
+        header_block = self.hpack_ctx.end_encode()
+
+        # Later, this may need to be fragmented according to
+        # the MAX_FRAME_SIZE setting
+        headers_frame = frames.headers_frame(self.identifier, header_block)
+        if data is None or len(data) is 0:
+            headers_frame.set_flag(frames.headers_flags.END_STREAM)
+
+        frames_to_send.append(headers_frame)
+
+        if data is None or len(data) is 0:
+            return frames_to_send
+
+        data_frame = frames.data_frame(data, self.identifier)
+        frames_to_send.append(data_frame)
+
+        return frames_to_send

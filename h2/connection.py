@@ -20,11 +20,13 @@ class connection:
         self.recv_buffer = bytearray()
 
     def initiate(self):
+        logger.debug("Sending connection preface")
         if self.callbacks['send'](connection_preface):
             # Report send error
             return
 
-        initial_settings_frame = frames.settings_frame()
+        initial_settings_frame = frames.settings_frame(0x0)
+        logger.debug("Sending initial settings frame %s", initial_settings_frame)
         if self.callbacks['send'](initial_settings_frame.encode()):
             # Report send error
             return
@@ -63,40 +65,59 @@ class connection:
                 # send connection error
                 return
 
-            # Apply the settings in the frame
-            
-            logger.debug("Got connection preface")
-            self.waiting_for_preface = False
+            # Was this an acknowledgement to ours?
+            if frame.is_flag_set(frames.settings_flags.ACK):
+                logger.debug("Got connection preface")
+                self.waiting_for_preface = False
+
+            # Either way, we need to apply the settings in the frame
+            self.handle_settings(frame)
         else:
             # Is it something we need to handle?
             switcher = {
-                    frames.frame_type.PUSH_PROMISE: handle_push_promise,
-                    frames.frame_type.PING: handle_ping,
-                    frames.frame_type.GOAWAY: handle_goaway,
+                    frames.frame_type.PUSH_PROMISE: self.handle_push_promise,
+                    frames.frame_type.PING: self.handle_ping,
+                    frames.frame_type.GOAWAY: self.handle_goaway,
+                    frames.frame_type.SETTINGS: self.handle_settings,
             }
-            handler = switcher.get(frame.frame_type, pass_frame_to_stream)
+            handler = switcher.get(frame.frame_type, self.pass_frame_to_stream)
             handler(frame)
 
     def handle_push_promise(self, frame):
+        logger.debug("Connection handling PUSH_PROMISE frame")
         return
 
     def handle_ping(self, frame):
+        logger.debug("Connection handling PING frame")
         return
 
     def handle_goaway(self, frame):
+        logger.debug("Connection handling GOAWAY frame")
+        return
+
+    def handle_settings(self, frame):
+        logger.debug("Connection handling SETTINGS frame")
         return
 
     def pass_frame_to_stream(self, frame):
-        if frame.stream_identifier not in self.streams:
+        if frame.identifier not in self.streams:
             # new stream
             # TODO: There are definitely qualifications on the stream id of a
             # new stream
             self.open_stream(frame.stream_identifier)
-        self.streams[frame.stream_identifier].handle_frame(frame)
+        self.streams[frame.stream_identifier].handle_recv_frame(frame)
 
     def open_stream(self, stream_identifier, reserved_state=stream.reserved.NONE):
         self.streams[stream_identifier] = stream.stream(stream_identifier, reserved_state)
 
-    def send_request(self, headers, data):
-        self.streams[self.next_stream_id] = stream.stream(self.next_stream_id)
+    def send_request(self, headers, data=None):
+        new_stream = stream.stream(self.next_stream_id, self.hpack_ctx)
+        self.streams[self.next_stream_id] = new_stream
         self.next_stream_id += 2
+
+        frames = new_stream.handle_send_request(headers, data)
+        logger.debug("Sending frames %s on stream id %d", frames, new_stream.identifier)
+        encoded_frames = bytearray()
+        for frame in frames:
+            encoded_frames.extend(frame.encode())
+        self.callbacks['send'](encoded_frames)
