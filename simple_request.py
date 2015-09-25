@@ -1,9 +1,10 @@
 from hpack import hpack
-from h2 import h2
-from os import urandom
+import h2.connection
+import asyncio
 import socket
 import logging
 import hexdump
+import functools
 import ssl
 
 def decode_frames(encoded):
@@ -14,129 +15,101 @@ def decode_frames(encoded):
         encoded = encoded[bytes_read:]
     return frames
 
+class h2_protocol_events(asyncio.Protocol):
+    def __init__(self, connection, loop, sock):
+        self.connection = connection
+        self.loop = loop
+        self.sock = sock
+
+    def connection_made(self, transport):
+        logging.debug("Made connection: %s", transport)
+        if self.sock.selected_alpn_protocol() != 'h2':
+            logging.warn("Server did not negotiate h2 (alpn)")
+            self.terminate()
+            return
+        self.connection.initiate()
+
+    def data_received(self, data):
+        logging.debug("RECV: ")
+        hexdump.hexdump(data)
+        self.connection.process_bytes(data)
+
+    def connection_lost(self, exc):
+        logging.debug("Connection lost: %s", exc)
+        self.terminate()
+
+    def terminate(self):
+        logging.debug("Cancelling all leftover tasks")
+        tasks = asyncio.Task.all_tasks(self.loop)
+        for task in tasks:
+            task.cancel()
+        logging.debug("Stopping event loop")
+        self.loop.stop()
+
+class h2_comms():
+    def __init__(self, url, port):
+        self.url = url
+        self.port = port
+        self.loop = asyncio.SelectorEventLoop()
+        self.sock = None
+        callbacks = {
+            "send": self.send_callback,
+            "close": self.close_callback
+        }
+        self.connection = h2.connection.connection(callbacks)
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sslcontext = ssl.create_default_context()
+        sslcontext.check_hostname = False
+        sslcontext.verify_mode = ssl.CERT_NONE
+        sslcontext.set_alpn_protocols(['http/1.1','h2'])
+        self.sock = sslcontext.wrap_socket(self.sock)
+        self.sock.connect((self.url, self.port))
+
+        coro = self.loop.create_connection(lambda: h2_protocol_events(self.connection, self.loop, self.sock),
+                sock=self.sock)
+
+        future = self.loop.create_task(coro)
+        future.add_done_callback(self.on_connect)
+
+    def on_connect(self, future):
+        exc = future.exception()
+        if exc is not None:
+            logging.warn("Got exception when connecting: %s", exc)
+            self.loop.stop()
+
+    def send_request(self, headers, data=None):
+        self.loop.create_task(self.send_request_coro(headers, data))
+
+    async def send_request_coro(self, headers, data):
+        self.connection.send_request(headers, data)
+
+    def send_callback(self, data):
+        logging.debug("SEND: ")
+        hexdump.hexdump(data)
+        self.sock.sendall(data)
+        return 0
+
+    def close_callback(self):
+        self.loop.stop()
+        return 0
+
 def main():
     logging.info("Started test program for h2")
+    comms = h2_comms('127.0.0.1', 10431) 
 
     logging.debug("Connecting socket")
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sslcontext = ssl.create_default_context()
-    sslcontext.check_hostname = False
-    sslcontext.verify_mode = ssl.CERT_NONE
-    sslcontext.set_alpn_protocols(['h2'])
-    sock = sslcontext.wrap_socket(sock)
+    comms.connect()
+    comms.send_request({
+        ":method": "GET",
+        ":scheme": "http",
+        ":path": "/",
+        ":authority": "localhost"
+    })
 
-    sock.connect(('127.0.0.1', 443))
-
-    if sock.selected_alpn_protocol() != 'h2':
-        logging.warn("Server did not negotiate h2 (alpn)")
-        return
-
-    sock.sendall(h2.connection_preface)
-    logging.debug("SEND:")
-    hexdump.hexdump(h2.connection_preface)
-    ctx = hpack.ctx()
-
-    f = h2.settings_frame()
-    f.set_param(h2.settings_identifiers.ENABLE_PUSH, 1)
-    f.set_param(h2.settings_identifiers.HEADERS_TABLE_SIZE, 4096)
-    f.stream_id = 0
-    encoded = f.encode()
-    sock.sendall(encoded)
-    logging.debug("SEND: %s",f)
-    hexdump.hexdump(encoded)
-
-    waiting = True
-    while waiting:
-        msg = sock.recv(512)
-        logging.debug('RECV:')
-        hexdump.hexdump(msg)
-        frames = decode_frames(msg)
-        logging.debug('%s', frames)
-        for frame in frames:
-            if isinstance(frame, h2.settings_frame) and frame.is_flag_set(h2.settings_flags.ACK):
-                waiting = False
-            if isinstance(frame, h2.goaway_frame) or len(msg) == 0:
-                waiting = False
-                return
-
-    f = h2.settings_frame()
-    f.stream_id = 0
-    f.set_flag(h2.settings_flags.ACK)
-    encoded = f.encode()
-    sock.sendall(encoded)
-    logging.debug("SEND: %s",f)
-    hexdump.hexdump(encoded)
-
-    ctx.start_encode()
-    ctx.encode_header(":method","GET")
-    ctx.encode_header(":scheme","http")
-    ctx.encode_header(":path","/")
-    ctx.encode_header(":authority","localhost")
-    header_block = ctx.end_encode()
-
-    f = h2.headers_frame()
-    f.header_block_fragment = header_block
-    f.set_flag(h2.headers_flags.END_STREAM)
-    f.set_flag(h2.headers_flags.END_HEADERS)
-    f.stream_id = 3
-    encoded = f.encode()
-    sock.sendall(encoded)
-    logging.debug("SEND: %s",f)
-    hexdump.hexdump(encoded)
-
-    waiting = True
-    while waiting:
-        msg = sock.recv(512)
-        logging.debug('RECV:')
-        hexdump.hexdump(msg)
-        frames = decode_frames(msg)
-        logging.debug('%s', frames)
-        for frame in frames:
-            if isinstance(frame, h2.headers_frame):
-                headers = ctx.decode_headers(frame.header_block_fragment)
-                logging.debug("Headers: %s",headers)
-            if isinstance(frame, h2.data_frame) and len(frame.data) > 0:
-                logging.debug("Data: %s",frame.data.decode('ascii'))
-                waiting = False
-            if isinstance(frame, h2.goaway_frame) or len(msg) == 0:
-                waiting = False
-                return
-
-    ctx.start_encode()
-    ctx.encode_header(":method","GET")
-    ctx.encode_header(":scheme","http")
-    ctx.encode_header(":path","/")
-    ctx.encode_header(":authority","localhost")
-    header_block = ctx.end_encode()
-
-    f = h2.headers_frame()
-    f.header_block_fragment = header_block
-    f.set_flag(h2.headers_flags.END_STREAM)
-    f.set_flag(h2.headers_flags.END_HEADERS)
-    f.stream_id = 5
-    encoded = f.encode()
-    sock.sendall(encoded)
-    logging.debug("SEND: %s",f)
-    hexdump.hexdump(encoded)
-
-    waiting = True
-    while waiting:
-        msg = sock.recv(512)
-        logging.debug('RECV:')
-        hexdump.hexdump(msg)
-        frames = decode_frames(msg)
-        logging.debug('%s', frames)
-        for frame in frames:
-            if isinstance(frame, h2.headers_frame):
-                headers = ctx.decode_headers(frame.header_block_fragment)
-                print(headers)
-                logging.debug("Headers: %s",headers)
-            if isinstance(frame, h2.data_frame) and len(frame.data) > 0:
-                logging.debug("Data: %s",frame.data.decode('ascii'))
-                waiting = False
-            if isinstance(frame, h2.goaway_frame) or len(msg) == 0:
-                waiting = False
-                return
+    comms.loop.run_forever()
+    comms.loop.close()
 
 if __name__ == '__main__':
     logging.basicConfig(format="[%(levelname)s] %(filename)s:%(lineno)d %(funcName)s(): %(message)s", level=logging.DEBUG)

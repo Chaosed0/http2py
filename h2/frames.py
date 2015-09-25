@@ -3,8 +3,6 @@ from os import urandom
 import struct
 import logging
 
-connection_preface = bytearray("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", "ascii")
-
 class frame_type(IntEnum):
     UNSET = -1
     DATA = 0x0
@@ -17,6 +15,11 @@ class frame_type(IntEnum):
     GOAWAY = 0x7
     WINDOW_UPDATE = 0x8
     CONTINUATION = 0x9
+
+class decoding_errors(IntEnum):
+    FRAME_TOO_SMALL = 1,
+    INVALID_FRAME_TYPE = 2,
+    TEMPORARILY_UNSUPPORTED = 3
 
 class frame:
     frame_map = None
@@ -37,13 +40,15 @@ class frame:
                     frame_type.CONTINUATION: None,
                 }
 
-        if encoded[3] in frame.frame_map:
+        if len(encoded) < 4:
+            return None,decoding_error.FRAME_TOO_SMALL
+        elif encoded[3] in frame.frame_map:
             frame_type_bit = frame_type(encoded[3])
             new_frame_type = frame.frame_map[frame_type_bit]
             if new_frame_type is None:
-                return None,0
+                return None,decoding_error.INVALID_FRAME_TYPE
         else:
-            return None,0
+            return None,decoding_error.INVALID_FRAME_TYPE
 
         the_frame = new_frame_type()
         bytes_read = the_frame.decode(encoded)
@@ -111,22 +116,6 @@ class headers_flags(IntEnum):
 
 class settings_flags(IntEnum):
     ACK = 0x1
-
-class error_codes(IntEnum):
-    NO_ERROR = 0x0
-    PROTOCOL_ERROR = 0x1
-    INTERNAL_ERROR = 0x2
-    FLOW_CONTROL_ERROR = 0x3
-    SETTINGS_TIMEOUT = 0x4
-    STREAM_CLOSED = 0x5
-    FRAME_SIZE_ERROR = 0x6
-    REFUSED_STREAM = 0x7
-    CANCEL = 0x8
-    COMPRESSION_ERROR = 0x9
-    CONNECT_ERROR = 0xa
-    ENHANCE_YOUR_CALM = 0xb
-    INADEQUATE_SECURITY = 0xc
-    HTTP_1_1_REQUIRED = 0xd
 
 class data_frame(frame):
     def __init__(self):
@@ -285,12 +274,28 @@ class settings_frame(frame):
             self.params[idx] = val
             cur_byte = cur_byte + 6
 
+class connection_error(IntEnum):
+    NO_ERROR = 0x0
+    PROTOCOL_ERROR = 0x1
+    INTERNAL_ERROR = 0x2
+    FLOW_CONTROL_ERROR = 0x3
+    SETTINGS_TIMEOUT = 0x4
+    STREAM_CLOSED = 0x5
+    FRAME_SIZE_ERROR = 0x6
+    REFUSED_STREAM = 0x7
+    CANCEL = 0x8
+    COMPRESSION_ERROR = 0x9
+    CONNECT_ERROR = 0xa
+    ENHANCE_YOUR_CALM = 0xb
+    INADEQUATE_SECURITY = 0xc
+    HTTP_1_1_REQUIRED = 0xd
+
 class goaway_frame(frame):
-    def __init__(self):
+    def __init__(self, error = connection_error.NO_ERROR, debug_data = None):
         frame.__init__(self, frame_type.GOAWAY)
         self.last_stream_id = 0
-        self.error_code = error_codes.NO_ERROR
-        self.debug_data = None
+        self.error_code = error
+        self.debug_data = debug_data
 
     def encode_payload(self):
         encoded = struct.pack("!HH", self.last_stream_id, self.error_code)
