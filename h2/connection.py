@@ -33,33 +33,32 @@ class connection:
 
     def process_bytes(self, some_bytes):
         self.recv_buffer.extend(some_bytes)
-        while True:
-            if len(self.recv_buffer) < 3:
-                # We can't even read the length yet
-                break
 
-            # Got length
+        # 9 bytes is the size of a frame header, so minimum size of frame
+        while len(self.recv_buffer) >= 9:
             length = int.from_bytes(self.recv_buffer[0:3], 'big')
-            if length > len(self.recv_buffer) - 3:
+            logger.debug("LENGTH %d %s", length, self.recv_buffer[0:3])
+            # Length is of payload only
+            if length > len(self.recv_buffer) - 9:
                 # We don't have the whole frame yet
+                logger.debug("Waiting on more bytes: have %d, need %d", len(self.recv_buffer) - 9, length)
                 break
 
             # Have a whole frame, decode it
             frame,read = frames.frame.decode_static(self.recv_buffer)
 
             if frame is None:
-                # Error decoding frame, report it and maybe send an error
+                logger.debug("Error occured when decoding a frame: %s", read)
                 self.recv_buffer = bytearray()
                 break
 
-            self.recv_buffer = self.recv_buffer[read+1:]
+            self.recv_buffer = self.recv_buffer[read:]
+            logger.debug("Decoded frame: %s", frame)
             logger.debug("Read %d bytes from recv_buffer, %d left", read, len(self.recv_buffer))
 
             self.process_frame(frame)
 
     def process_frame(self, frame):
-        logger.debug("Decoded frame: %s", frame)
-
         if self.waiting_for_preface:
             if frame.frame_type is not frames.frame_type.SETTINGS:
                 # send connection error
@@ -100,7 +99,7 @@ class connection:
         return
 
     def pass_frame_to_stream(self, frame):
-        if frame.identifier not in self.streams:
+        if frame.stream_identifier not in self.streams:
             # new stream
             # TODO: There are definitely qualifications on the stream id of a
             # new stream

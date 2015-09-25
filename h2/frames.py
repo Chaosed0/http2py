@@ -3,6 +3,8 @@ from os import urandom
 import struct
 import logging
 
+logger = logging.getLogger('frame')
+
 class frame_type(IntEnum):
     UNSET = -1
     DATA = 0x0
@@ -16,7 +18,7 @@ class frame_type(IntEnum):
     WINDOW_UPDATE = 0x8
     CONTINUATION = 0x9
 
-class decoding_errors(IntEnum):
+class decoding_error(IntEnum):
     FRAME_TOO_SMALL = 1,
     INVALID_FRAME_TYPE = 2,
     TEMPORARILY_UNSUPPORTED = 3
@@ -37,7 +39,7 @@ class frame:
                     frame_type.PING: None,
                     frame_type.GOAWAY: goaway_frame,
                     frame_type.WINDOW_UPDATE: None,
-                    frame_type.CONTINUATION: None,
+                    frame_type.CONTINUATION: continuation_frame,
                 }
 
         if len(encoded) < 4:
@@ -46,6 +48,7 @@ class frame:
             frame_type_bit = frame_type(encoded[3])
             new_frame_type = frame.frame_map[frame_type_bit]
             if new_frame_type is None:
+                logger.debug("Received frame we don't know how to decode: %s", frame_type_bit)
                 return None,decoding_error.INVALID_FRAME_TYPE
         else:
             return None,decoding_error.INVALID_FRAME_TYPE
@@ -308,3 +311,14 @@ class goaway_frame(frame):
         self.last_stream_id = encoded[0:4]
         self.error_code = encoded[4:8]
         self.debug_data = encoded[8:]
+
+class continuation_frame(frame):
+    def __init__(self, stream_id = 0x0, header_block_fragment = None):
+        frame.__init__(self, stream_id, frame_type.CONTINUATION)
+        self.header_block_fragment = header_block_fragment
+
+    def encode_payload(self):
+        return self.header_block_fragment
+
+    def decode_payload(self, encoded, length):
+        self.header_block_fragment = encoded

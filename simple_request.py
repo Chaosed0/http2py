@@ -123,6 +123,12 @@ def main():
         ":path": "/",
         ":authority": "localhost"
     })
+    comms.send_request({
+        ":method": "GET",
+        ":scheme": "http",
+        ":path": "/ssi.shtml",
+        ":authority": "localhost"
+    })
 
     comms.loop.run_forever()
     comms.loop.close()

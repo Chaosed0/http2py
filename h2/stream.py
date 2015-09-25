@@ -44,7 +44,7 @@ class stream:
         # WINDOW_UPDATE, and RST_STREAM.
         # PUSH_PROMISE, PING, and GOAWAY are handled by the connection.
 
-        logger.log("Stream id %d handling %s frame", self.identifier, frame.frame_type)
+        logger.debug("Stream id %d handling %s frame", self.identifier, frame.frame_type)
 
         if frame.frame_type is frames.frame_type.HEADERS:
             if self.state is stream_state.IDLE:
@@ -108,6 +108,7 @@ class stream:
         # Later, this may need to be fragmented according to
         # the MAX_FRAME_SIZE setting
         headers_frame = frames.headers_frame(self.identifier, header_block)
+        headers_frame.set_flag(frames.headers_flags.END_HEADERS)
         if data is None or len(data) is 0:
             headers_frame.set_flag(frames.headers_flags.END_STREAM)
 
