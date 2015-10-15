@@ -46,12 +46,14 @@ class h2_protocol_events(asyncio.Protocol):
         self.loop.stop()
 
 class h2_comms():
-    def __init__(self, url, port):
+    def __init__(self, url, port, handle_message_callback):
         self.url = url
         self.port = port
         self.loop = asyncio.SelectorEventLoop()
         self.sock = None
+        self.handle_message_callback = handle_message_callback
         callbacks = {
+            "handle_message": self.handle_message_callback,
             "send": self.send_callback,
             "close": self.close_callback
         }
@@ -64,7 +66,7 @@ class h2_comms():
         sslcontext = ssl.create_default_context()
         sslcontext.check_hostname = False
         sslcontext.verify_mode = ssl.CERT_NONE
-        sslcontext.set_alpn_protocols(['http/1.1','h2'])
+        sslcontext.set_alpn_protocols(['h2','http/1.1'])
         self.sock = sslcontext.wrap_socket(self.sock)
         self.sock.connect((self.url, self.port))
 
@@ -113,7 +115,7 @@ class h2_comms():
 
 def main():
     logging.info("Started test program for h2")
-    comms = h2_comms('127.0.0.1', 10431) 
+    comms = h2_comms('127.0.0.1', 443, handle_message_callback)
 
     logging.debug("Connecting socket")
     comms.connect()
@@ -132,6 +134,12 @@ def main():
 
     comms.loop.run_forever()
     comms.loop.close()
+
+def handle_message_callback(http_message):
+    logging.debug("Received message:")
+    for name,value in http_message.headers.items():
+        logging.debug("  %s: %s", name, value)
+    logging.debug("data: %s", http_message.data)
 
 if __name__ == '__main__':
     logging.basicConfig(format="[%(levelname)s] %(filename)s:%(lineno)d %(funcName)s(): %(message)s", level=logging.DEBUG)

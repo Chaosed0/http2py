@@ -72,7 +72,6 @@ class connection:
             # Either way, we need to apply the settings in the frame
             self.handle_settings(frame)
         else:
-            # Is it something we need to handle?
             switcher = {
                     frames.frame_type.PUSH_PROMISE: self.handle_push_promise,
                     frames.frame_type.PING: self.handle_ping,
@@ -80,23 +79,26 @@ class connection:
                     frames.frame_type.SETTINGS: self.handle_settings,
             }
             handler = switcher.get(frame.frame_type, self.pass_frame_to_stream)
-            handler(frame)
+            connection_error = handler(frame)
+            if connection_error is not frames.error.NO_ERROR:
+                logger.debug("connection error: %s", connection_error)
+                self.callbacks['send'](frames.goaway_frame(error=connection_error).encode())
 
     def handle_push_promise(self, frame):
         logger.debug("Connection handling PUSH_PROMISE frame")
-        return
+        return frames.error.NO_ERROR
 
     def handle_ping(self, frame):
         logger.debug("Connection handling PING frame")
-        return
+        return frames.error.NO_ERROR
 
     def handle_goaway(self, frame):
         logger.debug("Connection handling GOAWAY frame")
-        return
+        return frames.error.NO_ERROR
 
     def handle_settings(self, frame):
         logger.debug("Connection handling SETTINGS frame")
-        return
+        return frames.error.NO_ERROR
 
     def pass_frame_to_stream(self, frame):
         if frame.stream_identifier not in self.streams:
@@ -104,7 +106,11 @@ class connection:
             # TODO: There are definitely qualifications on the stream id of a
             # new stream
             self.open_stream(frame.stream_identifier)
-        self.streams[frame.stream_identifier].handle_recv_frame(frame)
+        stream = self.streams[frame.stream_identifier]
+        rc = stream.handle_recv_frame(frame)
+        self.flush_stream_send(stream)
+        self.handle_stream_messages(stream)
+        return rc
 
     def open_stream(self, stream_identifier, reserved_state=stream.reserved.NONE):
         self.streams[stream_identifier] = stream.stream(stream_identifier, reserved_state)
@@ -114,9 +120,19 @@ class connection:
         self.streams[self.next_stream_id] = new_stream
         self.next_stream_id += 2
 
-        frames = new_stream.handle_send_request(headers, data)
-        logger.debug("Sending frames %s on stream id %d", frames, new_stream.identifier)
-        encoded_frames = bytearray()
-        for frame in frames:
-            encoded_frames.extend(frame.encode())
-        self.callbacks['send'](encoded_frames)
+        new_stream.handle_send_message(headers, data)
+        self.flush_stream_send(new_stream)
+
+    def flush_stream_send(self, stream):
+        frames = stream.flush_send_queue()
+        if len(frames) > 0:
+            logger.debug("Sending frames %s on stream id %d", frames, stream.identifier)
+            encoded_frames = bytearray()
+            for frame in frames:
+                encoded_frames.extend(frame.encode())
+            self.callbacks['send'](encoded_frames)
+
+    def handle_stream_messages(self, stream):
+        messages = stream.flush_message_queue()
+        for message in messages:
+            self.callbacks['handle_message'](message)

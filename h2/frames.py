@@ -29,16 +29,15 @@ class frame:
     def decode_static(encoded):
         if frame.frame_map is None:
             frame.frame_map = {
-                    frame_type.UNSET: None,
                     frame_type.DATA: data_frame,
                     frame_type.HEADERS: headers_frame,
-                    frame_type.PRIORITY: None,
-                    frame_type.RST_STREAM: None,
+                    frame_type.PRIORITY: priority_frame,
+                    frame_type.RST_STREAM: rst_stream_frame,
                     frame_type.SETTINGS: settings_frame,
-                    frame_type.PUSH_PROMISE: None,
-                    frame_type.PING: None,
+                    frame_type.PUSH_PROMISE: push_promise_frame,
+                    frame_type.PING: ping_frame,
                     frame_type.GOAWAY: goaway_frame,
-                    frame_type.WINDOW_UPDATE: None,
+                    frame_type.WINDOW_UPDATE: window_update_frame,
                     frame_type.CONTINUATION: continuation_frame,
                 }
 
@@ -47,10 +46,8 @@ class frame:
         elif encoded[3] in frame.frame_map:
             frame_type_bit = frame_type(encoded[3])
             new_frame_type = frame.frame_map[frame_type_bit]
-            if new_frame_type is None:
-                logger.debug("Received frame we don't know how to decode: %s", frame_type_bit)
-                return None,decoding_error.INVALID_FRAME_TYPE
         else:
+            logger.debug("Unknown frame type %s", frame_type_bit)
             return None,decoding_error.INVALID_FRAME_TYPE
 
         the_frame = new_frame_type()
@@ -119,6 +116,26 @@ class headers_flags(IntEnum):
 
 class settings_flags(IntEnum):
     ACK = 0x1
+
+class push_promise_flags(IntEnum):
+    END_HEADERS = 0x4
+    PADDED = 0x8
+
+class error(IntEnum):
+    NO_ERROR = 0x0
+    PROTOCOL_ERROR = 0x1
+    INTERNAL_ERROR = 0x2
+    FLOW_CONTROL_ERROR = 0x3
+    SETTINGS_TIMEOUT = 0x4
+    STREAM_CLOSED = 0x5
+    FRAME_SIZE_ERROR = 0x6
+    REFUSED_STREAM = 0x7
+    CANCEL = 0x8
+    COMPRESSION_ERROR = 0x9
+    CONNECT_ERROR = 0xa
+    ENHANCE_YOUR_CALM = 0xb
+    INADEQUATE_SECURITY = 0xc
+    HTTP_1_1_REQUIRED = 0xd
 
 class data_frame(frame):
     def __init__(self, stream_id = 0x0, data = None):
@@ -234,6 +251,49 @@ class headers_frame(frame):
         cur_byte = cur_byte + length - self.pad_length
         # We can ignore the padding
 
+class priority_frame(frame):
+    def __init__(self, stream_id  = 0x0, exclusive_dependency = False, stream_dependency = 0x0, weight = 0):
+        frame.__init__(self, stream_id, frame_type.PRIORITY)
+        self.exclusive_dependency = exclusive_dependency
+        self.stream_dependency = stream_dependency
+        self.weight = weight
+
+    def encode_payload(self):
+        encoded = bytearray(5)
+
+        # 1-bit exclusive dependency flag and 31-bit stream dependency
+        encoded[0:4] = self.stream_dependency.to_bytes(4, 'big')
+        if self.exclusive_dependency:
+            encoded[0] = encoded[0] | 0x80
+        else:
+            encoded[0] = encoded[0] & 0x7f
+
+        # 8-bit frame weight
+        encoded[4] = self.weight & 0xff
+
+        return encoded
+
+    def decode_payload(self, encoded, length):
+        # 1-bit exclusive dependency flag
+        self.exclusive_dependency = (encoded[0] & 0x80) > 0
+        # 31-bit stream dependency
+        stream_dependency_bits = encoded[0:4]
+        stream_dependency_bits[0] = stream_dependency_bits[0] & 0x7f
+        self.stream_dependency = int.from_bytes(stream_dependency_bits, 'big')
+        self.weight = encoded[4]
+
+
+class rst_stream_frame(frame):
+    def __init__(self, stream_id = 0x0, error=error.NO_ERROR):
+        frame.__init__(self, stream_id, frame_type.RST_STREAM)
+        self.error_code = error
+
+    def encode_payload(self):
+        return self.error_code.to_bytes(4, 'big')
+
+    def decode_payload(self, encoded, length):
+        self.error_code = int.from_bytes(encoded[0:4])
+
 class settings_identifiers(IntEnum):
     HEADERS_TABLE_SIZE = 0x1
     ENABLE_PUSH = 0x2
@@ -253,7 +313,8 @@ class settings_frame(frame):
         self.params[identifier] = value
 
     def encode_payload(self):
-        # Maximum size is 36 bytes (6 different identifiers, 2 bytes to store the identifier and 4 bytes to store the value)
+        # Maximum size is 36 bytes (6 different identifiers, 2 bytes to store
+        # the identifier and 4 bytes to store the value)
         encoded = bytearray(36)
         cur_byte = 0
 
@@ -277,24 +338,85 @@ class settings_frame(frame):
             self.params[idx] = val
             cur_byte = cur_byte + 6
 
-class connection_error(IntEnum):
-    NO_ERROR = 0x0
-    PROTOCOL_ERROR = 0x1
-    INTERNAL_ERROR = 0x2
-    FLOW_CONTROL_ERROR = 0x3
-    SETTINGS_TIMEOUT = 0x4
-    STREAM_CLOSED = 0x5
-    FRAME_SIZE_ERROR = 0x6
-    REFUSED_STREAM = 0x7
-    CANCEL = 0x8
-    COMPRESSION_ERROR = 0x9
-    CONNECT_ERROR = 0xa
-    ENHANCE_YOUR_CALM = 0xb
-    INADEQUATE_SECURITY = 0xc
-    HTTP_1_1_REQUIRED = 0xd
+class push_promise_frame(frame):
+    def __init__(self, stream_id = 0x0, promised_stream = 0x0, header_block_fragment = None):
+        frame.__init__(self, stream_id, frame_type.PUSH_PROMISE)
+        self.pad_length = 0
+        self.promised_stream = promised_stream
+        self.header_block_fragment = header_block_fragment
+
+    def has_padding(self):
+        return self.is_flag_set(headers_flags.PADDED)
+
+    def has_priority(self):
+        return self.is_flag_set(headers_flags.PRIORITY)
+
+    def encode_payload(self):
+        encoded = bytearray(5 + len(self.header_block_fragment) + self.pad_length)
+        cur_byte = 0
+
+        # 8-bit padding length
+        if self.has_padding():
+            encoded[cur_byte] = self.pad_length & 0xff
+            cur_byte = cur_byte + 1
+
+        # 1-bit reserved flag and 31-bit promised stream id
+        encoded[cur_byte:cur_byte+4] = self.promised_stream.to_bytes(4, 'big')
+        encoded[cur_byte] = encoded[cur_byte] & 0x7f
+
+        # Variable-length header block fragment
+        encoded[cur_byte:] = self.header_block_fragment
+        cur_byte = cur_byte + len(self.header_block_fragment)
+
+        # Variable-length padding
+        if self.has_padding():
+            encoded[cur_byte:] = urandom(pad_length)
+            cur_byte = cur_byte + pad_length
+
+        return encoded
+
+    def decode_payload(self, encoded, length):
+        cur_byte = 0
+
+        # 8-bit padding length
+        if self.has_padding():
+            self.pad_length = encoded[cur_byte]
+            cur_byte = cur_byte + 1
+
+        # 1-bit reserved flag and 31-bit stream dependency
+        promised_stream_bits = encoded[cur_byte:cur_byte+4]
+        promised_stream_bits[0] = stream_dependency_bits[0] & 0x7f
+        self.promised_stream = int.from_bytes(promised_stream_bits, 'big')
+
+        # Variable-length header block fragment, must be decoded by an hpack ctx
+        self.header_block_fragment = encoded[cur_byte:cur_byte+length-self.pad_length]
+        cur_byte = cur_byte + length - self.pad_length
+        # We can ignore the padding
+
+class ping_frame(frame):
+    def __init__(self, stream_id = 0x0, data = None):
+        frame.__init__(self, stream_id, frame_type.PING)
+        self.data = data
+
+    def encode_payload(self):
+        return data[:8]
+
+    def decode_payload(self, encoded, length):
+        self.data = encoded[:8]
+
+class window_update_frame(frame):
+    def __init__(self, stream_id = 0x0, window_size_increment = 0):
+        frame.__init__(self, stream_id, frame_type.PING)
+        self.window_size_increment = window_size_increment
+
+    def encode_payload(self):
+        return self.window_size_increment.to_bytes(4, 'big') & 0x7fffffff
+
+    def decode_payload(self, encoded, length):
+        self.window_size_increment = encoded[:4] & 0x7fffffff
 
 class goaway_frame(frame):
-    def __init__(self, stream_id = 0x0, error = connection_error.NO_ERROR, debug_data = None):
+    def __init__(self, stream_id = 0x0, error = error.NO_ERROR, debug_data = None):
         frame.__init__(self, stream_id, frame_type.GOAWAY)
         self.last_stream_id = 0
         self.error_code = error
